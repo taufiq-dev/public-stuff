@@ -1,4 +1,4 @@
-// packages/mfe-id-ocr/src/camera/useMainRearCamera.ts
+// packages/mfe-id-ocr/src/camera/use-main-rear-camera.ts
 //
 // Owns the camera stream for a component: selects the main rear camera on mount, attaches the
 // stream to a <video>, cleans up on unmount, and exposes retry / switchTo for the UI.
@@ -14,7 +14,7 @@ import {
   type CameraSelectionResult,
   type ScoredCandidate,
   type SelectionReport,
-} from "./cameraSelection";
+} from "./camera-selection";
 
 export type CameraState =
   | { status: "loading" }

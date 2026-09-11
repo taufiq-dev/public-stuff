@@ -1,4 +1,4 @@
-// packages/mfe-id-ocr/src/camera/capturePhoto.ts
+// packages/mfe-id-ocr/src/camera/capture-photo.ts
 //
 // Takes a still from a live camera preview and returns a JPEG under the upload size limit.
 // Chromium: ImageCapture.takePhoto() at sensor resolution. Elsewhere: the sharpest of a few preview

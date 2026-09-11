@@ -14,9 +14,9 @@
 import React, { useCallback, useEffect, useRef, useState } from "react";
 import type { StreamCaptureContent } from "../DocumentUpload";
 import CaptureButton from "../CaptureButton";
-import type { SelectionReport } from "../../camera/cameraSelection";
-import { useMainRearCamera } from "../../camera/useMainRearCamera";
-import { blobToDataUrl, capturePhoto, cropSpecFromElements } from "../../camera/capturePhoto";
+import type { SelectionReport } from "../../camera/camera-selection";
+import { useMainRearCamera } from "../../camera/use-main-rear-camera";
+import { blobToDataUrl, capturePhoto, cropSpecFromElements } from "../../camera/capture-photo";
 import {
   CameraContainer,
   CameraPlaceholder,

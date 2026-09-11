@@ -1,4 +1,4 @@
-// packages/mfe-id-ocr/src/camera/cameraSelection.ts
+// packages/mfe-id-ocr/src/camera/camera-selection.ts
 //
 // Picks the main rear camera on multi-camera phones. `facingMode: "environment"` only guarantees
 // *a* rear camera and enumerateDevices() order is not stable, so we never pick by index: read each
@@ -165,7 +165,7 @@ const PREFERRED_LABEL_FRAGMENTS: string[] = [];
 
 const isRearCamera = (camera: CameraCandidate): boolean => {
   // Capabilities are authoritative when present.
-  if (camera.facingMode.length > 0) return camera.facingMode.includes("environment");
+  if (camera.facingMode.length > 0) return camera.facingMode.indexOf("environment") !== -1;
   // Otherwise fall back to the label. An empty label is treated as rear so we never end up with
   // zero candidates on browsers that hide everything.
   const label = camera.label.toLowerCase();
@@ -365,7 +365,9 @@ export const selectMainRearCamera = async (
   if (needsProbe) stopStream(defaultStream); // most phones refuse a second camera while one is held
 
   const candidates: CameraCandidate[] = [];
-  for (const [index, device] of devices.entries()) {
+  for (let index = 0; index < devices.length; index += 1) {
+    const device = devices[index];
+    if (!device) continue;
     const known = cheap[index];
     if (known) {
       candidates.push(known);

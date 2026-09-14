@@ -10,19 +10,16 @@
 //   - the KTP crop is taken from the preview frame at the stream's full resolution (a 4K preview is
 //     requested) in source pixels, not from a viewport-sized canvas, so it is ~1000–2000 px wide
 //     instead of ~368 px — and it is exactly what the user framed;
-//   - the guide box is a DOM element and the crop reads its rendered rect, so the two can't drift.
+//   - the guide box is a DOM element and the crop reads its rendered rect, so the two can't drift;
+//   - the crop carries a margin around the box for the backend (cropMargin, default 8%), and
+//     uploadImage also receives where the box sits inside it, so the viewer can be shown just the
+//     box (see focused-image.tsx) while the backend gets the context.
 
 import React, { useCallback, useEffect, useRef, useState } from "react";
-import type { StreamCaptureContent } from "./document-upload"; // wherever that type lives in your tree
 import CaptureButton from "./capture-button";
-import type { SelectionReport } from "./camera-selection";
+import type { CapturedImageMeta, StreamCaptureProps } from "./types";
 import { useMainRearCamera } from "./use-main-rear-camera";
-import {
-  blobToDataUrl,
-  capturePhoto,
-  cropSpecFromElements,
-  mapSourceToOverlay,
-} from "./capture-photo";
+import { blobToDataUrl, capturePhoto, cropSpecFromElements, mapSourceToOverlay } from "./capture-photo";
 import {
   CameraContainer,
   CameraPlaceholder,
@@ -37,28 +34,15 @@ import {
   GuidelineTextBox,
 } from "./stream-capture.styles";
 
-const SLIDE_MS = 600; // must match the slide animations in styled.components
+const SLIDE_MS = 600; // must match the slide animations in stream-capture.styles
 const MAX_UPLOAD_BYTES = 5 * 1024 * 1024;
-
-type StreamCaptureProps = {
-  cmsContent: StreamCaptureContent & { retryText?: string; switchCameraText?: string };
-  /** Receives the captured KTP as a JPEG data URL — unchanged contract. */
-  uploadImage: (dataUrl: string) => Promise<void>;
-  setStream: (open: boolean) => void;
-  onClickCapture?: () => void;
-  onStreamCancel?: () => void;
-  /** What each device reported and which camera was chosen. Wire to analytics. */
-  onCameraReport?: (report: SelectionReport) => void;
-  /** Shows a "switch camera" control when more than one rear camera is available. Off by default. */
-  enableCameraSwitch?: boolean;
-  streamCaptureCancelTagIdentifier?: string;
-  streamCaptureCaptureTagIdentifier?: string;
-};
+const DEFAULT_CROP_MARGIN = 0.08;
 
 const StreamCapture: React.FC<StreamCaptureProps> = ({
   cmsContent,
   uploadImage,
   setStream,
+  cropMargin = DEFAULT_CROP_MARGIN,
   onClickCapture,
   onStreamCancel,
   onCameraReport,
@@ -115,9 +99,10 @@ const StreamCapture: React.FC<StreamCaptureProps> = ({
     setIsCapturing(true);
 
     try {
-      const crop = cropSpecFromElements(guide, video);
+      const crop = cropSpecFromElements(guide, video, { margin: cropMargin });
       const result = await capturePhoto(video, state.stream, { maxBytes: MAX_UPLOAD_BYTES, crop });
       const dataUrl = await blobToDataUrl(result.blob);
+      const meta: CapturedImageMeta = { focus: result.focus, width: result.width, height: result.height };
 
       // Where the cut region sits on the element, in CSS px — exact, including the crop margin
       // and any clamping at the frame edge.
@@ -129,7 +114,7 @@ const StreamCapture: React.FC<StreamCaptureProps> = ({
       video.pause(); // freeze the rest of the preview while the sheet slides away
       setCapturedImage({ src: dataUrl, style });
       closeAfterSlide(() => {
-        void uploadImage(dataUrl);
+        void uploadImage(dataUrl, meta);
       });
     } catch (error) {
       console.error("[id-ocr] capture failed", error);

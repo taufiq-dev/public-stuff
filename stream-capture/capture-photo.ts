@@ -33,6 +33,11 @@ export type CaptureOptions = {
   nativeStill?: boolean;
 };
 
+// A sub-region of the encoded image as fractions (0–1) of its width and height. When the crop
+// carries a margin, this is the guide box itself: the part to show the viewer, while the whole
+// image — context included — goes to the backend.
+export type FocusRegion = { x: number; y: number; width: number; height: number };
+
 export type CaptureResult = {
   blob: Blob;
   width: number;
@@ -42,6 +47,7 @@ export type CaptureResult = {
   cropped: boolean;
   cropRect: Rect | null; // the region that was cut, in source pixels
   sourceSize: Size; // the frame it was cut from
+  focus: FocusRegion; // the guide box within the encoded image; the full image when uncropped
 };
 
 type Encoded = Pick<CaptureResult, "blob" | "width" | "height" | "quality">;
@@ -244,6 +250,17 @@ export const mapOverlayToSource = (spec: CropSpec, source: Size): Rect => {
   return { x: x0, y: y0, width: x1 - x0, height: y1 - y0 };
 };
 
+const FULL_FRAME: FocusRegion = { x: 0, y: 0, width: 1, height: 1 };
+
+// Where `inner` sits within `outer`, as fractions of `outer`. Fractions survive the downscale in
+// encodeUnderBudget, so the same numbers apply to the encoded image at any resolution.
+const focusWithin = (outer: Rect, inner: Rect): FocusRegion => ({
+  x: (inner.x - outer.x) / outer.width,
+  y: (inner.y - outer.y) / outer.height,
+  width: inner.width / outer.width,
+  height: inner.height / outer.height,
+});
+
 // 1:1 copy of the source pixels inside `rect` — no resampling, nothing lost.
 export const cropSource = (source: CanvasImageSource, rect: Rect): HTMLCanvasElement => {
   const canvas = document.createElement("canvas");
@@ -327,7 +344,12 @@ export const capturePhoto = async (
     const region = cropRect ? cropSource(frame, cropRect) : frame;
     const regionSize = cropRect ?? frameSize;
     const encoded = await encodeUnderBudget(region, regionSize.width, regionSize.height, limits);
-    return { ...encoded, source, cropped: cropRect !== null, cropRect, sourceSize: frameSize };
+    // The margin-less box, located inside the padded crop. Identical to the crop when margin is 0.
+    const focus =
+      crop && cropRect
+        ? focusWithin(cropRect, mapOverlayToSource({ ...crop, margin: 0 }, frameSize))
+        : FULL_FRAME;
+    return { ...encoded, source, cropped: cropRect !== null, cropRect, sourceSize: frameSize, focus };
   };
 
   // Opt-in native still. Only usable when it frames the same scene as the preview, and never a

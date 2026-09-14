@@ -1,4 +1,4 @@
-// packages/mfe-id-ocr/src/camera/camera-selection.ts
+// camera-selection.ts
 //
 // Picks the main rear camera on multi-camera phones. `facingMode: "environment"` only guarantees
 // *a* rear camera and enumerateDevices() order is not stable, so we never pick by index: read each
@@ -243,13 +243,18 @@ export const forgetCamera = (): void => {
 // Opening a camera
 // ---------------------------------------------------------------------------
 
-// Where ImageCapture exists (Chromium) the still is taken at sensor resolution regardless of the
-// preview, so keep the preview cheap. Elsewhere (Safari) the still IS a preview frame, so ask for a
-// big one. `ideal` is a soft request — the browser picks the closest supported size, never fails.
-const previewConstraints = (): MediaTrackConstraints =>
-  typeof window !== "undefined" && "ImageCapture" in window
-    ? {}
-    : { width: { ideal: 4096 }, height: { ideal: 3072 } };
+// The still is cut from a preview frame (WYSIWYG — see capture-photo.ts), so the preview has to
+// carry the pixels: ask for 4K. `ideal` is a soft request — the browser picks the closest supported
+// format and never fails on it — so phones that top out at 1080p still work, with a smaller crop.
+// Lower this on a device tier where a 4K preview stutters; the crop math adapts automatically.
+type Size = { width: number; height: number };
+
+export const PREVIEW_IDEAL: Size = { width: 3840, height: 2160 };
+
+const previewConstraints = (): MediaTrackConstraints => ({
+  width: { ideal: PREVIEW_IDEAL.width },
+  height: { ideal: PREVIEW_IDEAL.height },
+});
 
 const isStaleDeviceError = (error: unknown): boolean => {
   const name = (error as { name?: unknown } | null)?.name;

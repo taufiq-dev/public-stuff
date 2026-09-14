@@ -1,4 +1,4 @@
-// packages/mfe-id-ocr/src/components/StreamCapture/index.tsx
+// stream-capture.tsx
 //
 // Same flow as before: slides up on mount → user taps capture → captured image holds on screen
 // while the sheet slides down → after the slide, uploadImage(dataUrl) and setStream(false).
@@ -7,16 +7,22 @@
 // What changed underneath:
 //   - the camera is chosen by capability scoring (useMainRearCamera), not by whichever rear lens
 //     the browser happened to hand back — this is what fixes the Huawei zoom-lens problem;
-//   - the KTP crop is taken from the full-resolution still/frame in source pixels, not from a
-//     viewport-sized canvas, so it is ~1000–2600 px wide instead of ~368 px;
+//   - the KTP crop is taken from the preview frame at the stream's full resolution (a 4K preview is
+//     requested) in source pixels, not from a viewport-sized canvas, so it is ~1000–2000 px wide
+//     instead of ~368 px — and it is exactly what the user framed;
 //   - the guide box is a DOM element and the crop reads its rendered rect, so the two can't drift.
 
 import React, { useCallback, useEffect, useRef, useState } from "react";
-import type { StreamCaptureContent } from "../DocumentUpload";
-import CaptureButton from "../CaptureButton";
-import type { SelectionReport } from "../../camera/camera-selection";
-import { useMainRearCamera } from "../../camera/use-main-rear-camera";
-import { blobToDataUrl, capturePhoto, cropSpecFromElements } from "../../camera/capture-photo";
+import type { StreamCaptureContent } from "./document-upload"; // wherever that type lives in your tree
+import CaptureButton from "./capture-button";
+import type { SelectionReport } from "./camera-selection";
+import { useMainRearCamera } from "./use-main-rear-camera";
+import {
+  blobToDataUrl,
+  capturePhoto,
+  cropSpecFromElements,
+  mapSourceToOverlay,
+} from "./capture-photo";
 import {
   CameraContainer,
   CameraPlaceholder,
@@ -29,7 +35,7 @@ import {
   ErrorText,
   GuideBox,
   GuidelineTextBox,
-} from "./styled.components";
+} from "./stream-capture.styles";
 
 const SLIDE_MS = 600; // must match the slide animations in styled.components
 const MAX_UPLOAD_BYTES = 5 * 1024 * 1024;
@@ -66,7 +72,11 @@ const StreamCapture: React.FC<StreamCaptureProps> = ({
 
   const [isCapturing, setIsCapturing] = useState(false); // tap acknowledged: controls hidden
   const [isClosing, setIsClosing] = useState(false); // slide-down running
-  const [capturedImage, setCapturedImage] = useState<string | null>(null);
+  // The captured card plus where it sits on screen, so it can be laid exactly over the spot it was
+  // taken from while the sheet slides away.
+  const [capturedImage, setCapturedImage] = useState<{ src: string; style: React.CSSProperties } | null>(
+    null,
+  );
 
   const isReady = state.status === "ready";
 
@@ -105,14 +115,19 @@ const StreamCapture: React.FC<StreamCaptureProps> = ({
     setIsCapturing(true);
 
     try {
-      const result = await capturePhoto(video, state.stream, {
-        maxBytes: MAX_UPLOAD_BYTES,
-        crop: cropSpecFromElements(guide, video),
-      });
+      const crop = cropSpecFromElements(guide, video);
+      const result = await capturePhoto(video, state.stream, { maxBytes: MAX_UPLOAD_BYTES, crop });
       const dataUrl = await blobToDataUrl(result.blob);
 
-      video.pause(); // freeze the preview on what was captured while the sheet slides away
-      setCapturedImage(dataUrl);
+      // Where the cut region sits on the element, in CSS px — exact, including the crop margin
+      // and any clamping at the frame edge.
+      const placed = result.cropRect ? mapSourceToOverlay(result.cropRect, crop, result.sourceSize) : null;
+      const style: React.CSSProperties = placed
+        ? { left: placed.x, top: placed.y, width: placed.width, height: placed.height }
+        : { left: 0, top: 0, width: "100%", height: "100%" };
+
+      video.pause(); // freeze the rest of the preview while the sheet slides away
+      setCapturedImage({ src: dataUrl, style });
       closeAfterSlide(() => {
         void uploadImage(dataUrl);
       });
@@ -135,8 +150,13 @@ const StreamCapture: React.FC<StreamCaptureProps> = ({
       <CameraPlaceholder data-ready={isReady} />
       <CameraVideo ref={videoRef} className="camera" autoPlay playsInline muted data-ready={isReady} />
 
-      {capturedImage && isClosing && (
-        <CapturedImage src={capturedImage} alt="captured" className="captured-image" />
+      {capturedImage && (
+        <CapturedImage
+          src={capturedImage.src}
+          alt="captured"
+          className="captured-image"
+          style={capturedImage.style}
+        />
       )}
 
       <GuideBox ref={guideRef} id="id_ektp_guide_box" />

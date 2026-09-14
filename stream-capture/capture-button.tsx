@@ -1,4 +1,4 @@
-// packages/mfe-id-ocr/src/components/CaptureButton/index.tsx
+// capture-button.tsx
 import React from "react";
 import styled from "styled-components";
 

@@ -1,9 +1,10 @@
-// packages/mfe-id-ocr/src/camera/capture-photo.ts
+// capture-photo.ts
 //
 // Takes a still from a live camera preview and returns a JPEG under the upload size limit.
-// Chromium: ImageCapture.takePhoto() at sensor resolution. Elsewhere: the sharpest of a few preview
-// frames at full stream resolution. Optionally crops to an on-screen guide box, mapped through the
-// element's object-fit onto the source pixels — never through a display-sized canvas.
+// Default path is WYSIWYG: the sharpest of a few preview frames at the stream's full resolution,
+// optionally cropped to an on-screen guide box mapped through the element's object-fit onto the
+// source pixels — never through a display-sized canvas. ImageCapture.takePhoto() is available as an
+// opt-in for full-frame captures where framing is loose.
 
 // ---------------------------------------------------------------------------
 // Types
@@ -24,8 +25,12 @@ export type CaptureOptions = {
   maxBytes?: number; // hard upload limit
   maxLongEdge?: number; // cap resolution first — nobody needs a 50 MP selfie
   minQuality?: number; // never encode below this; downscale instead
-  frames?: number; // canvas path: frames sampled for sharpness
+  frames?: number; // frames sampled for sharpness (preview path)
   crop?: CropSpec; // crop to a guide box, computed in source pixels
+  // Use ImageCapture.takePhoto() where available. OFF by default: on Android it reconfigures the
+  // camera, which visibly shifts the preview's field of view and returns a still whose framing
+  // need not match what the user saw — so it must never be combined with a guide-box crop.
+  nativeStill?: boolean;
 };
 
 export type CaptureResult = {
@@ -35,7 +40,11 @@ export type CaptureResult = {
   quality: number;
   source: "takePhoto" | "canvas";
   cropped: boolean;
+  cropRect: Rect | null; // the region that was cut, in source pixels
+  sourceSize: Size; // the frame it was cut from
 };
+
+type Encoded = Pick<CaptureResult, "blob" | "width" | "height" | "quality">;
 
 const MB = 1024 * 1024;
 const QUALITY_STEPS = [0.95, 0.92, 0.9, 0.88, 0.85, 0.82, 0.8];
@@ -91,7 +100,7 @@ export const encodeUnderBudget = async (
   sourceWidth: number,
   sourceHeight: number,
   limits: { maxBytes: number; maxLongEdge: number; minQuality: number },
-): Promise<Omit<CaptureResult, "source" | "cropped">> => {
+): Promise<Encoded> => {
   let { width, height } = fitLongEdge(sourceWidth, sourceHeight, limits.maxLongEdge);
 
   for (let attempt = 0; attempt < 6; attempt += 1) {
@@ -133,7 +142,7 @@ const takeNativePhoto = async (track: MediaStreamTrack, maxLongEdge: number): Pr
 };
 
 // ---------------------------------------------------------------------------
-// Sharpest-of-N preview frames (Safari fallback)
+// Sharpest-of-N preview frames
 // ---------------------------------------------------------------------------
 
 // Relative sharpness (variance of a Laplacian) on a small grayscale copy. Only meaningful for
@@ -170,6 +179,9 @@ const sharpness = (source: CanvasImageSource, width: number, height: number): nu
   return sumSq / n - mean * mean;
 };
 
+// Scores each frame from a small copy and only draws the full-resolution frame when it beats the
+// best so far, into a single reused canvas. With a 4K preview a full-res canvas is ~30-50 MB, so
+// holding one instead of N keeps mobile Safari well inside its canvas memory budget.
 const grabSharpestFrame = async (
   video: HTMLVideoElement,
   frames: number,
@@ -179,15 +191,22 @@ const grabSharpestFrame = async (
   const width = video.videoWidth;
   const height = video.videoHeight;
 
-  let best: { canvas: HTMLCanvasElement; score: number } | null = null;
+  const best = document.createElement("canvas");
+  best.width = width;
+  best.height = height;
+  const ctx = best.getContext("2d");
+  if (!ctx) throw new Error("2D canvas context unavailable");
+
+  let bestScore = -Infinity;
   for (let i = 0; i < frames; i += 1) {
-    const canvas = drawToCanvas(video, width, height);
-    const score = sharpness(canvas, width, height);
-    if (!best || score > best.score) best = { canvas, score };
+    const score = sharpness(video, width, height);
+    if (score > bestScore) {
+      bestScore = score;
+      ctx.drawImage(video, 0, 0, width, height);
+    }
     if (i < frames - 1) await new Promise((resolve) => setTimeout(resolve, intervalMs));
   }
-  if (!best) throw new Error("No frames captured");
-  return best.canvas;
+  return best;
 };
 
 // ---------------------------------------------------------------------------
@@ -236,6 +255,27 @@ export const cropSource = (source: CanvasImageSource, rect: Rect): HTMLCanvasEle
   return canvas;
 };
 
+// Inverse of mapOverlayToSource: where a source-pixel rect sits on the element, in CSS px.
+// Use it to lay the captured image exactly over the spot it was taken from.
+export const mapSourceToOverlay = (
+  rect: Rect,
+  spec: Pick<CropSpec, "container" | "fit" | "mirrored">,
+  source: Size,
+): Rect => {
+  const { container, fit = "cover", mirrored = false } = spec;
+  const pick = fit === "cover" ? Math.max : Math.min;
+  const scale = pick(container.width / source.width, container.height / source.height);
+  const overflowX = (source.width * scale - container.width) / 2;
+  const overflowY = (source.height * scale - container.height) / 2;
+  const x = mirrored ? source.width - rect.x - rect.width : rect.x;
+  return {
+    x: x * scale - overflowX,
+    y: rect.y * scale - overflowY,
+    width: rect.width * scale,
+    height: rect.height * scale,
+  };
+};
+
 // Builds the CropSpec from the live DOM, so the guide box can be styled freely in CSS and the crop
 // always matches exactly what is on screen — including after viewport or URL-bar resizes.
 export const cropSpecFromElements = (
@@ -264,40 +304,52 @@ export const capturePhoto = async (
   stream: MediaStream,
   options: CaptureOptions = {},
 ): Promise<CaptureResult> => {
-  const { maxBytes = 5 * MB, maxLongEdge = 3200, minQuality = 0.85, frames = 4, crop } = options;
+  const {
+    maxBytes = 5 * MB,
+    maxLongEdge = 3200,
+    minQuality = 0.85,
+    frames = 4,
+    crop,
+    nativeStill = false,
+  } = options;
   if (video.readyState < HTMLMediaElement.HAVE_CURRENT_DATA) {
     throw new Error("Video has no frame to capture yet");
   }
   const limits = { maxBytes, maxLongEdge, minQuality };
   const preview: Size = { width: video.videoWidth, height: video.videoHeight };
 
-  // When cropping, ask for a bigger still: the crop is what gets encoded, so the size cap should
-  // apply to the card, not to the whole frame it is cut from.
-  const stillLongEdge = crop ? Math.max(maxLongEdge, 4000) : maxLongEdge;
-  const track = stream.getVideoTracks()[0];
-  const native = track ? await takeNativePhoto(track, stillLongEdge) : null;
+  const finish = async (
+    frame: CanvasImageSource,
+    frameSize: Size,
+    source: CaptureResult["source"],
+  ): Promise<CaptureResult> => {
+    const cropRect = crop ? mapOverlayToSource(crop, frameSize) : null;
+    const region = cropRect ? cropSource(frame, cropRect) : frame;
+    const regionSize = cropRect ?? frameSize;
+    const encoded = await encodeUnderBudget(region, regionSize.width, regionSize.height, limits);
+    return { ...encoded, source, cropped: cropRect !== null, cropRect, sourceSize: frameSize };
+  };
 
-  if (native) {
-    // Decode once, honouring EXIF orientation so the backend never receives a rotated image.
-    const bitmap = await createImageBitmap(native, { imageOrientation: "from-image" });
-    try {
-      // The still must frame the same scene as the preview for the overlay to map onto it.
-      // A 4:3 still behind a 16:9 preview does not, so in that case crop the preview instead.
-      if (!crop || sameAspect(bitmap, preview)) {
-        const source = crop ? cropSource(bitmap, mapOverlayToSource(crop, bitmap)) : bitmap;
-        const encoded = await encodeUnderBudget(source, source.width, source.height, limits);
-        return { ...encoded, source: "takePhoto", cropped: Boolean(crop) };
+  // Opt-in native still. Only usable when it frames the same scene as the preview, and never a
+  // safe assumption when a guide box is involved (see CaptureOptions.nativeStill).
+  if (nativeStill && !crop) {
+    const track = stream.getVideoTracks()[0];
+    const native = track ? await takeNativePhoto(track, maxLongEdge) : null;
+    if (native) {
+      // Decode once, honouring EXIF orientation so the backend never receives a rotated image.
+      const bitmap = await createImageBitmap(native, { imageOrientation: "from-image" });
+      try {
+        return await finish(bitmap, bitmap, "takePhoto");
+      } finally {
+        bitmap.close();
       }
-      console.warn("[camera] still aspect differs from preview; cropping the preview frame instead");
-    } finally {
-      bitmap.close();
     }
   }
 
+  // WYSIWYG path: the frame the user is looking at, at the stream's full resolution. Resolution
+  // comes from asking for a large preview when the camera is opened (see camera-selection.ts).
   const frame = await grabSharpestFrame(video, frames);
-  const source = crop ? cropSource(frame, mapOverlayToSource(crop, frame)) : frame;
-  const encoded = await encodeUnderBudget(source, source.width, source.height, limits);
-  return { ...encoded, source: "canvas", cropped: Boolean(crop) };
+  return finish(frame, preview, "canvas");
 };
 
 // ---------------------------------------------------------------------------

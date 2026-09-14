@@ -1,4 +1,4 @@
-// packages/mfe-id-ocr/src/components/StreamCapture/styled.components.tsx
+// stream-capture.styles.tsx
 import styled from "styled-components";
 
 const EASE = "cubic-bezier(0.4, 0, 0.2, 1)";
@@ -16,20 +16,28 @@ export const CameraContainer = styled.div`
   top: 0;
   left: 0;
   width: 100vw;
-  height: 100vh;
-  height: 100dvh;
   overflow: hidden;
   z-index: 10000;
   background-color: black;
+
+  /* Dynamic viewport height where supported, so the layout tracks the URL bar. */
+  --viewport-height: 100vh;
+  @supports (height: 100dvh) {
+    --viewport-height: 100dvh;
+  }
+  height: var(--viewport-height);
 
   --guide-inset: 16px;
   --guide-ratio: 1.65; /* 330 / 200, the original card box ratio */
   --guide-width: calc(100vw - 2 * var(--guide-inset));
   --guide-height: calc(var(--guide-width) / var(--guide-ratio));
-  --guide-top: calc((100vh - var(--guide-height)) * 0.2);
-  @supports (height: 100dvh) {
-    --guide-top: calc((100dvh - var(--guide-height)) * 0.2);
-  }
+  --guide-top: calc((var(--viewport-height) - var(--guide-height)) * 0.2);
+  --guide-bottom: calc(var(--guide-top) + var(--guide-height));
+
+  /* The controls row is as tall as the capture button; its top edge is what the text centres against. */
+  --controls-bottom: 40px;
+  --capture-button-size: 70px;
+  --controls-top: calc(var(--viewport-height) - var(--controls-bottom) - var(--capture-button-size));
 
   /* CSS-only slide-up animation on mount */
   animation: slideUp ${SLIDE} ${EASE} forwards;
@@ -99,21 +107,14 @@ export const CameraPlaceholder = styled.div`
   }
 `;
 
-// Counter-slides against the closing sheet, exactly as before, so the captured image holds its
-// place on screen while the camera UI drops away beneath it.
+// The captured card, positioned by inline style over the exact region it was cut from. It sits
+// under the dimmed surround (z-index 3 < 4), so through the guide box the user sees the real
+// capture — proof that what was framed is what was taken — and it slides away with the sheet.
 export const CapturedImage = styled.img`
   position: absolute;
-  top: 0;
-  left: 0;
-  width: 100vw;
-  height: 100vh;
-  object-fit: cover;
   z-index: 3;
-  transition: transform ${SLIDE} ${EASE};
-
-  ${CameraContainer}[data-closing="true"] & {
-    transform: translateY(-100vh);
-  }
+  object-fit: cover;
+  pointer-events: none;
 `;
 
 // The dimmed surround is the box's own shadow, so the cut-out follows the border radius exactly
@@ -132,12 +133,13 @@ export const GuideBox = styled.div`
   pointer-events: none;
 `;
 
+// Centred on the midpoint between the guide box's bottom edge and the capture button's top edge.
 export const GuidelineTextBox = styled.div`
   position: absolute;
   z-index: 10;
-  top: calc(var(--guide-top) + var(--guide-height) + 24px);
+  top: calc((var(--guide-bottom) + var(--controls-top)) / 2);
   left: 50%;
-  transform: translateX(-50%);
+  transform: translate(-50%, -50%);
   width: 330px;
   max-width: calc(100vw - 32px);
   text-align: center;
@@ -159,7 +161,7 @@ export const EKTPGuidelineTextTitle = styled.div`
 
 export const CaptureControlsContainer = styled.div`
   position: absolute;
-  bottom: 40px;
+  bottom: var(--controls-bottom);
   left: 0;
   right: 0;
   padding: 0 24px;
